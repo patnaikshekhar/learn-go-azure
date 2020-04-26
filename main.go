@@ -80,7 +80,12 @@ func main() {
 
 // Method focus of this exercise
 func executeUpdates(interval int, authorizer *autorest.Authorizer, graphAuthorizer *autorest.Authorizer) {
+	rateLimit := 5
 	done := make(chan bool)
+	rateLimiter := make(chan bool, rateLimit)
+	for i := 0; i < rateLimit; i++ {
+		rateLimiter <- true
+	}
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	go func() {
 		for {
@@ -101,7 +106,7 @@ func executeUpdates(interval int, authorizer *autorest.Authorizer, graphAuthoriz
 				var wg sync.WaitGroup
 				wg.Add(len(subs))
 				for _, sub := range subs {
-					go evaluateStatus(*authorizer, *graphAuthorizer, sub, start, now, &wg)
+					go evaluateStatus(*authorizer, *graphAuthorizer, sub, start, now, &wg, rateLimiter)
 				}
 				wg.Wait()
 				fmt.Println("Executed at: ", t)
@@ -115,8 +120,11 @@ func evaluateStatus(
 	auth autorest.Authorizer, authGraph autorest.Authorizer,
 	subscription string,
 	fromTime time.Time, toTime time.Time,
-	wg *sync.WaitGroup) {
+	wg *sync.WaitGroup,
+	rateLimiter chan bool) {
 	defer wg.Done()
+	defer func() { rateLimiter <- true }()
+	<-rateLimiter
 	log.Printf("Evaluating status for: %s", subscription)
 
 	resourceClient := resources.NewClient(subscription)
