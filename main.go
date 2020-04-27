@@ -35,6 +35,10 @@ var (
 )
 
 func main() {
+
+	// Create main context
+	ctx := context.TODO()
+
 	// create an authorizer from env vars or Azure Managed Service Idenity
 	log.Println("Starting app Press CTRL+C to end.")
 	authorizer, err := newAuthorizer()
@@ -56,7 +60,7 @@ func main() {
 	}
 	tenantsClient := subscriptions.NewTenantsClient()
 	tenantsClient.Authorizer = *authorizer
-	tenants, err := tenantsClient.ListComplete(context.Background())
+	tenants, err := tenantsClient.ListComplete(ctx)
 	for tenants.NotDone() {
 		value := tenants.Value()
 		tenant = *value.TenantID
@@ -66,7 +70,7 @@ func main() {
 	log.Printf("Subscriptions are %v", subs)
 	providersClient := resources.NewProvidersClient(subs[0])
 	providersClient.Authorizer = *authorizer
-	providersList, err := providersClient.ListComplete(context.Background(), to.Int32Ptr(50000), "")
+	providersList, err := providersClient.ListComplete(ctx, to.Int32Ptr(50000), "")
 	for providersList.NotDone() {
 		value := providersList.Value()
 		for _, providerType := range *value.ResourceTypes {
@@ -75,33 +79,40 @@ func main() {
 		}
 		providersList.Next()
 	}
-	executeUpdates(interval, authorizer, graphAuthorizer)
+	executeUpdates(ctx, interval, authorizer, graphAuthorizer)
 	log.Println("End of schedule")
 }
 
 // Method focus of this exercise
-func executeUpdates(interval int, authorizer *autorest.Authorizer, graphAuthorizer *autorest.Authorizer) {
-	for true {
+func executeUpdates(ctx context.Context, interval int, authorizer *autorest.Authorizer, graphAuthorizer *autorest.Authorizer) {
 
-		var wg sync.WaitGroup
+	ticker := time.NewTicker(time.Duration(interval * 1e+9))
 
-		now := time.Now()
-		subs, err := getSubscriptions(*authorizer)
-		if err != nil {
-			log.Panic(err)
+	for {
+		select {
+		case <-ticker.C:
+			var wg sync.WaitGroup
+
+			now := time.Now()
+			subs, err := getSubscriptions(*authorizer)
+			if err != nil {
+				log.Panic(err)
+			}
+
+			for _, sub := range subs {
+				wg.Add(1)
+				go evaluateStatus(&wg, *authorizer, *graphAuthorizer, sub, start, now)
+			}
+
+			wg.Wait()
+
+			back, _ := time.ParseDuration(fmt.Sprintf("-%ds", interval*20))
+			start = now.Add(back)
+		case <-ctx.Done():
+			return
 		}
-
-		for _, sub := range subs {
-			wg.Add(1)
-			go evaluateStatus(&wg, *authorizer, *graphAuthorizer, sub, start, now)
-		}
-
-		wg.Wait()
-
-		back, _ := time.ParseDuration(fmt.Sprintf("-%ds", interval*20))
-		start = now.Add(back)
-		time.Sleep(time.Duration(interval * 1e+9))
 	}
+
 }
 
 func evaluateStatus(
