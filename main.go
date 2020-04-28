@@ -124,6 +124,7 @@ func executeUpdates(ctx context.Context, interval int, authorizer *autorest.Auth
 
 			// Close channel once completed
 			close(workerChannel)
+			close(workDoneChannel)
 
 			back, _ := time.ParseDuration(fmt.Sprintf("-%ds", interval*20))
 			start = now.Add(back)
