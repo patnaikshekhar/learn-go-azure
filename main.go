@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/profiles/2017-03-09/resources/mgmt/subscriptions"
@@ -32,6 +31,10 @@ var (
 	providers = map[string]string{}
 	tenant    = ""
 	start     = time.Now().AddDate(0, 0, -89)
+)
+
+const (
+	noOfWorkers = 5
 )
 
 func main() {
@@ -91,20 +94,36 @@ func executeUpdates(ctx context.Context, interval int, authorizer *autorest.Auth
 	for {
 		select {
 		case <-ticker.C:
-			var wg sync.WaitGroup
 
 			now := time.Now()
+
+			// Create a work channel
+			workerChannel := make(chan string)
+			workDoneChannel := make(chan struct{})
+
+			// Start Workers
+			for i := 0; i < noOfWorkers; i++ {
+				go subscriptionWorker(workerChannel, workDoneChannel, authorizer, graphAuthorizer, start, now)
+			}
+
 			subs, err := getSubscriptions(*authorizer)
 			if err != nil {
 				log.Panic(err)
 			}
 
 			for _, sub := range subs {
-				wg.Add(1)
-				go evaluateStatus(&wg, *authorizer, *graphAuthorizer, sub, start, now)
+				// Pass message to worker
+				workerChannel <- sub
 			}
 
-			wg.Wait()
+			for range subs {
+				<-workDoneChannel
+			}
+
+			log.Printf("All subscriptions completed")
+
+			// Close channel once completed
+			close(workerChannel)
 
 			back, _ := time.ParseDuration(fmt.Sprintf("-%ds", interval*20))
 			start = now.Add(back)
@@ -115,13 +134,19 @@ func executeUpdates(ctx context.Context, interval int, authorizer *autorest.Auth
 
 }
 
+func subscriptionWorker(workerChannel <-chan string, workDoneChannel chan<- struct{}, authorizer *autorest.Authorizer, graphAuthorizer *autorest.Authorizer, start time.Time, now time.Time) {
+	// Do work
+	for sub := range workerChannel {
+		// Execute work sync
+		evaluateStatus(*authorizer, *graphAuthorizer, sub, start, now)
+		workDoneChannel <- struct{}{}
+	}
+}
+
 func evaluateStatus(
-	wg *sync.WaitGroup,
 	auth autorest.Authorizer, authGraph autorest.Authorizer,
 	subscription string,
 	fromTime time.Time, toTime time.Time) {
-
-	defer wg.Done()
 
 	log.Printf("Evaluating status for: %s", subscription)
 
