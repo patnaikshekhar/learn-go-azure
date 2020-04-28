@@ -97,18 +97,18 @@ func executeUpdates(ctx context.Context, interval int, authorizer *autorest.Auth
 
 			now := time.Now()
 
+			subs, err := getSubscriptions(*authorizer)
+			if err != nil {
+				log.Panic(err)
+			}
+
 			// Create a work channel
 			workerChannel := make(chan string)
-			workDoneChannel := make(chan struct{})
+			workDoneChannel := make(chan struct{}, len(subs))
 
 			// Start Workers
 			for i := 0; i < noOfWorkers; i++ {
 				go subscriptionWorker(workerChannel, workDoneChannel, authorizer, graphAuthorizer, start, now)
-			}
-
-			subs, err := getSubscriptions(*authorizer)
-			if err != nil {
-				log.Panic(err)
 			}
 
 			for _, sub := range subs {
